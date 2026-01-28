@@ -1,71 +1,86 @@
 import streamlit as st
 from pptx import Presentation
-from pptx.util import Inches, Pt
+from pptx.util import Inches
 from io import BytesIO
 from PIL import Image
 
-st.title("🖼️ 图片转 PPT 自动排版工具")
-st.write("上传多张图片，自动生成 16:9 的四行排版 PPT。")
+st.title("🖼️ 智能图片转 PPT (自动分页版)")
 
-# 参数设置
-SLIDE_WIDTH = Inches(13.333) # 16:9
+# --- 配置参数 ---
+SLIDE_WIDTH = Inches(13.333)  # 16:9 比例
 SLIDE_HEIGHT = Inches(7.5)
-TITLE_HEIGHT = Inches(1.2)   # 顶部留白给标题
-MARGIN = Inches(0.2)         # 边缘留白
+# 缩小顶部留白：从 1.2 英寸 缩小到 0.6 英寸
+TITLE_HEIGHT = Inches(0.6)   
+MARGIN = Inches(0.2)         # 左右边缘留白
 SPACING = Inches(0.1)        # 图片间距
-ROW_COUNT = 4                # 固定四行
+ROW_COUNT = 4                # 每页固定四行
 
-uploaded_files = st.file_uploader("选择图片文件", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
+# 初始化状态，防止下载后按钮消失
+if 'ppt_data' not in st.session_state:
+    st.session_state.ppt_data = None
+
+uploaded_files = st.file_uploader("选择并上传图片 (可多选)", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
 
 if uploaded_files:
-    # 按照文件名排序，确保顺序
+    # 排序图片
     files = sorted(uploaded_files, key=lambda x: x.name)
     
-    if st.button("🪄 生成 PPT"):
+    if st.button("🚀 开始自动排版"):
         prs = Presentation()
-        # 设置 16:9 尺寸
         prs.slide_width = SLIDE_WIDTH
         prs.slide_height = SLIDE_HEIGHT
         
-        slide = prs.slides.add_slide(prs.slide_layouts[6]) # 使用空白版式
-        
-        # 计算每行可用高度
+        # 计算每一行的高度
         available_height = SLIDE_HEIGHT - TITLE_HEIGHT - (2 * MARGIN) - ((ROW_COUNT - 1) * SPACING)
         row_height = available_height / ROW_COUNT
         
+        def add_new_slide(p):
+            return p.slides.add_slide(p.slide_layouts[6])
+
+        # 初始化第一页
+        current_slide = add_new_slide(prs)
         current_y = TITLE_HEIGHT + MARGIN
         current_x = MARGIN
-        
-        # 简单的逻辑：平均分配图片到四行
-        images_per_row = len(files) // ROW_COUNT + (1 if len(files) % ROW_COUNT > 0 else 0)
-        
-        for i, file in enumerate(files):
-            # 获取图片原始比例
+        current_row = 1
+
+        for file in files:
             img_data = Image.open(file)
             orig_w, orig_h = img_data.size
             aspect_ratio = orig_w / orig_h
-            
-            # 计算在此高度下的等比宽度
             display_width = row_height * aspect_ratio
             
-            # 检查是否需要换行（如果超过了 ROW_COUNT 分配的量，或者手动控制）
-            if i > 0 and i % images_per_row == 0:
-                current_y += row_height + SPACING
+            # --- 换行检测 ---
+            # 如果当前宽度 + 图片宽度 > 幻灯片总宽 - 右边距
+            if current_x + display_width > SLIDE_WIDTH - MARGIN:
                 current_x = MARGIN
+                current_y += row_height + SPACING
+                current_row += 1
+                
+                # --- 翻页检测 ---
+                # 如果当前行数超过了预设的 4 行
+                if current_row > ROW_COUNT:
+                    current_slide = add_new_slide(prs)
+                    current_y = TITLE_HEIGHT + MARGIN
+                    current_row = 1
             
             # 插入图片
-            slide.shapes.add_picture(file, current_x, current_y, height=row_height)
+            current_slide.shapes.add_picture(file, current_x, current_y, height=row_height)
             
+            # 移动 X 坐标
             current_x += display_width + SPACING
 
-        # 保存并下载
+        # 保存结果到内存
         ppt_buffer = BytesIO()
         prs.save(ppt_buffer)
-        
-        st.success("🎉 排版完成！")
-        st.download_button(
-            label="📥 下载 PPT",
-            data=ppt_buffer.getvalue(),
-            file_name="auto_layout.pptx",
-            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
-        )
+        st.session_state.ppt_data = ppt_buffer.getvalue()
+        st.success("✅ PPT 生成成功！")
+
+# --- 显示下载按钮 ---
+if st.session_state.ppt_data:
+    st.download_button(
+        label="📥 点击下载 PPT 文件",
+        data=st.session_state.ppt_data,
+        file_name="auto_layout_presentation.pptx",
+        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        key="download_btn" # 固定 key 确保按钮持久
+    )
